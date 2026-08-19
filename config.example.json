@@ -2,14 +2,19 @@
   "google": {
     "client_id": "1234567890-abcdefg.apps.googleusercontent.com",
     "client_secret": "GOCSPX-xxxxxxxxxxxxxxxxxxxx",
-    "features": ["gmail", "calendar", "chat"]
+    "features": ["gmail", "calendar", "chat"],
+    "_email_source": "api | scrape — set to \"scrape\" to read Gmail from a logged-in browser instead of the API (see scraper.py); the calendar/chat cards always use the API",
+    "email_source": "api"
   },
   "salesforce": {
     "client_id": "3MVG9...your connected app consumer key...",
     "client_secret": "your connected app consumer secret",
     "login_url": "https://login.salesforce.com",
     "api_version": "v61.0",
-    "mine_only": false
+    "mine_only": false,
+    "_case_source": "api | scrape — \"scrape\" reads the Lightning case list from a logged-in browser; requires instance_url below",
+    "case_source": "api",
+    "instance_url": "https://your-domain.my.salesforce.com"
   },
   "limits": {
     "emails": 8,

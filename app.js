@@ -117,7 +117,7 @@ function emailRow(mail) {
   return `<li><a class="row ${mail.unread ? "unread" : ""}" href="${esc(mail.url)}" target="_blank" rel="noreferrer">
     <div class="line1">
       <span class="who">${esc(mail.from)}</span>
-      <span class="when">${esc(ago(mail.at))}</span>
+      <span class="when">${esc(mail.at ? ago(mail.at) : (mail.when_label || ""))}</span>
     </div>
     <div class="title">${mail.starred ? "★ " : ""}${esc(mail.subject)}</div>
     <div class="snippet">${esc(mail.snippet)}</div>

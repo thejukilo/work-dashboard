@@ -4,3 +4,7 @@ __pycache__/
 # Local secrets — never commit these.
 config.json
 tokens.json
+
+# Logged-in browser sessions used by the scrape source (scraper.py).
+browser-profiles/
+last-*.html

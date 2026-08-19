@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, urlparse
 import auth
 import demo
 import httpclient as http
+import scraper
 import sources
 
 HERE = Path(__file__).resolve().parent
@@ -71,6 +72,8 @@ def section(fetch):
     except http.HttpError as exc:
         return {"ok": False, "items": [], "error": str(exc),
                 "needs_auth": exc.status == 401}
+    except scraper.ScrapeError as exc:      # browser-scrape source: log in / retune
+        return {"ok": False, "items": [], "error": str(exc), "needs_auth": False}
     except Exception as exc:                                  # never blank the page
         return {"ok": False, "items": [], "error": f"{type(exc).__name__}: {exc}",
                 "needs_auth": False}
@@ -95,11 +98,25 @@ def build_overview(cfg):
         creds = auth.credentials("salesforce", cfg)
         return sources.recent_cases(creds, cfg, limits["cases"])
 
+    # Opt-in browser-scrape sources (config: source == "scrape"), for orgs whose
+    # OAuth path is blocked. These read a real logged-in browser instead of the
+    # APIs — see scraper.py. Everything else stays on the sanctioned API path.
+    def emails_job():
+        if cfg["google"].get("email_source") == "scrape":
+            return lambda: scraper.latest_emails(limits["emails"])
+        return google("gmail", sources.latest_emails, limits["emails"])
+
+    def cases_job():
+        if cfg["salesforce"].get("case_source") == "scrape":
+            return lambda: scraper.recent_cases(
+                cfg["salesforce"].get("instance_url", ""), limits["cases"])
+        return salesforce
+
     jobs = {
-        "emails": google("gmail", sources.latest_emails, limits["emails"]),
+        "emails": emails_job(),
         "events": google("calendar", sources.upcoming_events, limits["events"]),
         "chats": google("chat", sources.latest_chats, limits["chats"]),
-        "cases": salesforce,
+        "cases": cases_job(),
     }
     live = {name: job for name, job in jobs.items() if job}
     with ThreadPoolExecutor(max_workers=max(1, len(live))) as pool:

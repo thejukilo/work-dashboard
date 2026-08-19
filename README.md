@@ -102,6 +102,8 @@ A brand-new connected app can take ~10 minutes before it accepts logins.
 | Key | Default | What it does |
 | --- | --- | --- |
 | `google.features` | all three | Which Google cards to run: `"gmail"`, `"calendar"`, `"chat"`. A card you drop is never asked for at consent time — see below. |
+| `google.email_source` | `"api"` | `"scrape"` reads Gmail from a logged-in browser instead of the API — see [Browser-scrape mode](#browser-scrape-mode-when-the-api-is-blocked). |
+| `salesforce.case_source` | `"api"` | `"scrape"` reads the Lightning case list from a logged-in browser; needs `salesforce.instance_url`. |
 | `salesforce.mine_only` | `false` | Show only cases you own, instead of every case you can see. |
 | `salesforce.api_version` | `v61.0` | Salesforce REST API version. |
 | `limits.emails` / `.events` / `.chats` / `.cases` | 8 / 4 / 8 / 8 | How many rows per card. |
@@ -131,6 +133,60 @@ widen the grant — the stored token carries whatever scopes you consented to.
 
 This is also the fastest way to find out *which* scope an admin is blocking:
 connect with one feature at a time.
+
+## Browser-scrape mode (when the API is blocked)
+
+Some Workspace orgs only allow *approved* OAuth apps to read mail, so the Gmail
+API path returns `access_denied` no matter how the client is set up. As a
+fallback, the dashboard can read Gmail (and Salesforce cases) out of a **real
+browser you log into yourself**, with no OAuth involved.
+
+> **Status: unvalidated.** This path was written but never run end-to-end by the
+> author — Gmail's basic-HTML markup and Salesforce's Lightning DOM change
+> without notice, and Google sometimes flags automated browsers at login. Treat
+> it as a starting point you may need to tune, not a finished feature. The
+> API path is the supported one.
+
+It needs Playwright and a browser:
+
+```bash
+pip install playwright
+playwright install chromium      # or rely on an installed Chrome (used by default)
+```
+
+Log in once per provider — a real Chrome window opens and you sign in exactly as
+you would by hand (SSO, MFA, everything):
+
+```bash
+python3 scraper.py login gmail
+SF_INSTANCE_URL=https://your-domain.my.salesforce.com python3 scraper.py login salesforce
+```
+
+Point the cards at the scrape source in `config.json`:
+
+```json
+"google":     { "features": ["calendar", "chat"], "email_source": "scrape" },
+"salesforce": { "case_source": "scrape", "instance_url": "https://your-domain.my.salesforce.com" }
+```
+
+Check what it can extract before wiring it into the dashboard:
+
+```bash
+python3 scraper.py test gmail
+python3 scraper.py test salesforce
+```
+
+If a card comes back empty or mislabeled, the markup has shifted. Re-run with
+`DASHBOARD_SCRAPE_DEBUG=1` to dump the rendered HTML to
+`browser-profiles/last-<provider>.html`, and the selectors in `gmail_html.py` /
+`salesforce_dom.py` can be re-tuned against the real sample.
+
+**What it reads, and doesn't:** only pages you're already logged into and allowed
+to see, on your own machine; nothing is sent anywhere. The session lives in
+`browser-profiles/` (gitignored). Gmail's basic-HTML view gives a date *label*
+("Aug 19"), not a full timestamp, so scraped emails show that label verbatim
+rather than a live "12m ago". Nothing is embedded in the dashboard page — Google
+and Salesforce both refuse to be framed, so the browser runs as its own window.
 
 ## How it hangs together
 
