@@ -5,6 +5,7 @@ Salesforce cases and newest chat messages.
 
     python3 server.py            # http://localhost:8766
     python3 server.py --demo     # sample data, no accounts needed
+    python3 server.py --check     # diagnose setup: config, connection, live calls
 
 Everything runs locally: this process serves the page, holds the OAuth
 redirect endpoints, and makes the API calls to Google and Salesforce
@@ -38,6 +39,7 @@ import sources
 HERE = Path(__file__).resolve().parent
 PORT = int(os.environ.get("DASHBOARD_PORT", "8766"))
 DEMO_ONLY = "--demo" in sys.argv
+CHECK_ONLY = "--check" in sys.argv
 
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -241,8 +243,87 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # --------------------------------------------------------------------------- #
+# Setup doctor (--check)
+# --------------------------------------------------------------------------- #
+FEED_LABELS = {
+    "emails": ("Gmail", "google"),
+    "events": ("Calendar", "google"),
+    "chats": ("Chat", "google"),
+    "cases": ("Salesforce cases", "salesforce"),
+}
+
+# Failure text → the thing that actually needs fixing. Ordered: first match wins.
+HINTS = [
+    ("has not been used in project", "Enable that API in the Google Cloud console, wait a minute, retry."),
+    ("api has not been enabled", "Enable that API in the Google Cloud console, wait a minute, retry."),
+    ("insufficient authentication scopes", "Scope missing from the grant — add it on the consent screen, then reconnect."),
+    ("insufficient permission", "Scope missing from the grant — add it on the consent screen, then reconnect."),
+    ("caller does not have permission", "Your Workspace admin may not allow this API for user accounts."),
+    ("invalid_session_id", "Salesforce session expired — reconnect from the dashboard."),
+    ("invalid_client", "Check the client id/secret, and give a new connected app ~10 minutes to propagate."),
+    ("invalid_grant", "The stored grant is no longer valid — reconnect from the dashboard."),
+    ("no instance_url", "Reconnect Salesforce; the stored token predates the instance URL."),
+]
+
+
+def _hint(message):
+    low = (message or "").lower()
+    for needle, hint in HINTS:
+        if needle in low:
+            return hint
+    return ""
+
+
+def run_check(cfg):
+    """Walk the setup end to end and say precisely what is missing."""
+    print("Work Dashboard — setup check\n")
+
+    print("Register these redirect URIs, exactly:")
+    for provider in auth.PROVIDERS:
+        print(f"  {provider:<11} {redirect_uri(provider)}")
+
+    print(f"\nConfig: {auth.CONFIG_PATH}"
+          f"{'' if auth.CONFIG_PATH.exists() else '   (missing — cp config.example.json config.json)'}")
+    for provider in auth.PROVIDERS:
+        client = cfg[provider]["client_id"]
+        secret = "set" if cfg[provider].get("client_secret") else "empty"
+        state = f"client_id {client[:24]}… (secret {secret})" if client else "no client_id yet"
+        print(f"  [{'x' if client else ' '}] {provider:<11} {state}")
+    if cfg["salesforce"]["client_id"]:
+        print(f"      salesforce login_url {cfg['salesforce']['login_url']}")
+
+    print(f"\nTokens: {auth.TOKENS_PATH}")
+    for provider in auth.PROVIDERS:
+        connected = auth.is_connected(provider)
+        note = "connected" if connected else "not connected — click Connect in the app"
+        print(f"  [{'x' if connected else ' '}] {provider:<11} {note}")
+
+    print("\nLive calls:")
+    failures = 0
+    sections = build_overview(cfg)["sections"]
+    for name, (label, provider) in FEED_LABELS.items():
+        result = sections[name]
+        if result["ok"]:
+            print(f"  [x] {label:<17} {len(result['items'])} item(s)")
+            continue
+        failures += 1
+        # NeedsAuth already says *why* ("revoked", "no client_id") — keep it.
+        print(f"  [ ] {label:<17} {result['error'] or 'not connected yet'}")
+        hint = _hint(result["error"])
+        if hint:
+            print(f"      → {hint}")
+
+    print("\nAll four feeds are working." if not failures
+          else f"\n{failures} of 4 feeds need attention (see above).")
+    return 0 if not failures else 1
+
+
+# --------------------------------------------------------------------------- #
 def main():
     cfg = auth.load_config()
+    if CHECK_ONLY:
+        raise SystemExit(run_check(cfg))
+
     url = f"http://localhost:{PORT}/"
 
     print(f"Work Dashboard → {url}")

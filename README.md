@@ -14,7 +14,7 @@ Google and Salesforce, and stores nothing anywhere else.
 
 | File | What it is |
 | --- | --- |
-| `server.py` | Local server + OAuth endpoints + the API calls. **This is what you run.** |
+| `server.py` | Local server + OAuth endpoints + the API calls. **This is what you run.** (`--demo`, `--check`) |
 | `auth.py` | OAuth 2.0 (authorization code + PKCE) and the token store. |
 | `sources.py` | The four feeds: Gmail, Calendar, Chat, Salesforce. |
 | `httpclient.py` | Tiny JSON-over-HTTPS helper. |
@@ -42,6 +42,16 @@ python3 server.py
 Open <http://localhost:8766>, click **Connect Google Workspace** and **Connect
 Salesforce** once, and you're done — refresh tokens are kept in `tokens.json`
 (chmod 600, gitignored) so you never log in again.
+
+Stuck at any point:
+
+```bash
+python3 server.py --check
+```
+
+It prints the redirect URIs to register, what's in `config.json`, which
+providers are connected, and then makes one real call per feed — naming the
+exact thing to fix when one fails.
 
 ### Google Workspace (email, calendar, chat)
 
@@ -117,6 +127,8 @@ The page refreshes every minute, pauses while the tab is in the background, and
 re-renders the countdown on the next appointment every 30 seconds in between.
 
 ## Troubleshooting
+
+Run `python3 server.py --check` first — it usually names the problem outright.
 
 **"Not connected to … yet" that won't go away** — the OAuth grant was revoked or
 expired. Click Connect again; `tokens.json` is rewritten.
