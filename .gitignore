@@ -8,3 +8,6 @@ tokens.json
 # Logged-in browser sessions used by the scrape source (scraper.py).
 browser-profiles/
 last-*.html
+
+# Python virtual environment
+.venv/
