@@ -286,19 +286,30 @@ HINTS = [
 
 
 def consent_hint(error_code, provider, cfg):
-    """Explain the consent-screen rejections that a managed org produces."""
-    blocked = ("admin_policy_enforced", "access_denied", "org_internal",
-               "disallowed_useragent")
-    if error_code not in blocked:
-        return ""
+    """Explain the consent-screen rejections, without guessing at the cause."""
     client_id = cfg[provider]["client_id"] or "(the client id in config.json)"
-    return (
+    org_block = (
         "<br><br>Your organisation controls which apps may read this data. "
         "An administrator can allow it by trusting this OAuth client id:"
         f"<br><code style='color:#2bd4a0;word-break:break-all'>{client_id}</code>"
         "<br><br>Everything the app requests is read-only, and the data never "
         "leaves this machine."
     )
+    if error_code in ("admin_policy_enforced", "org_internal"):
+        return org_block
+    if error_code == "access_denied":
+        # Three different things produce this, and only one is the org.
+        return (
+            "<br><br>This one is ambiguous — it means consent wasn't granted. "
+            "In order of likelihood:"
+            "<br>1. The consent screen is in <b>Testing</b> and your account "
+            "isn't on its <b>Test users</b> list. Add it, then retry."
+            "<br>2. Consent was dismissed rather than approved — retry and "
+            "choose Allow."
+            "<br>3. Your organisation blocks the app outright."
+            + org_block
+        )
+    return ""
 
 
 def _hint(message):
