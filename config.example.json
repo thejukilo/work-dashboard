@@ -3,7 +3,7 @@
     "client_id": "1234567890-abcdefg.apps.googleusercontent.com",
     "client_secret": "GOCSPX-xxxxxxxxxxxxxxxxxxxx",
     "features": ["gmail", "calendar", "chat"],
-    "_email_source": "api | scrape — set to \"scrape\" to read Gmail from a logged-in browser instead of the API (see scraper.py); the calendar/chat cards always use the API",
+    "_email_source": "api | chrome | scrape — \"chrome\" reads Gmail from your own running Chrome over its debug port (best on managed devices, no install); \"scrape\" uses Playwright; the calendar/chat cards always use the API",
     "email_source": "api"
   },
   "salesforce": {
@@ -12,7 +12,7 @@
     "login_url": "https://login.salesforce.com",
     "api_version": "v61.0",
     "mine_only": false,
-    "_case_source": "api | scrape — \"scrape\" reads the Lightning case list from a logged-in browser; requires instance_url below",
+    "_case_source": "api | chrome | scrape — \"chrome\" reads the Lightning case list from your running Chrome; \"scrape\" uses Playwright; both need instance_url below",
     "case_source": "api",
     "instance_url": "https://your-domain.my.salesforce.com"
   },

@@ -32,6 +32,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import auth
+import chrome_source
 import demo
 import httpclient as http
 import scraper
@@ -98,18 +99,26 @@ def build_overview(cfg):
         creds = auth.credentials("salesforce", cfg)
         return sources.recent_cases(creds, cfg, limits["cases"])
 
-    # Opt-in browser-scrape sources (config: source == "scrape"), for orgs whose
-    # OAuth path is blocked. These read a real logged-in browser instead of the
-    # APIs — see scraper.py. Everything else stays on the sanctioned API path.
+    # Opt-in browser sources, for orgs whose OAuth path is blocked. Two backends
+    # read a real logged-in browser instead of the APIs:
+    #   "chrome" — your already-running, CAA-verified Chrome (chrome_source)
+    #   "scrape" — a browser Playwright launches (scraper)
+    # Everything else stays on the sanctioned API path.
     def emails_job():
-        if cfg["google"].get("email_source") == "scrape":
+        src = cfg["google"].get("email_source")
+        if src == "chrome":
+            return lambda: chrome_source.latest_emails(limits["emails"])
+        if src == "scrape":
             return lambda: scraper.latest_emails(limits["emails"])
         return google("gmail", sources.latest_emails, limits["emails"])
 
     def cases_job():
-        if cfg["salesforce"].get("case_source") == "scrape":
-            return lambda: scraper.recent_cases(
-                cfg["salesforce"].get("instance_url", ""), limits["cases"])
+        src = cfg["salesforce"].get("case_source")
+        instance = cfg["salesforce"].get("instance_url", "")
+        if src == "chrome":
+            return lambda: chrome_source.recent_cases(instance, limits["cases"])
+        if src == "scrape":
+            return lambda: scraper.recent_cases(instance, limits["cases"])
         return salesforce
 
     jobs = {

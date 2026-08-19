@@ -102,8 +102,8 @@ A brand-new connected app can take ~10 minutes before it accepts logins.
 | Key | Default | What it does |
 | --- | --- | --- |
 | `google.features` | all three | Which Google cards to run: `"gmail"`, `"calendar"`, `"chat"`. A card you drop is never asked for at consent time — see below. |
-| `google.email_source` | `"api"` | `"scrape"` reads Gmail from a logged-in browser instead of the API — see [Browser-scrape mode](#browser-scrape-mode-when-the-api-is-blocked). |
-| `salesforce.case_source` | `"api"` | `"scrape"` reads the Lightning case list from a logged-in browser; needs `salesforce.instance_url`. |
+| `google.email_source` | `"api"` | `"chrome"` or `"scrape"` reads Gmail from a logged-in browser instead of the API — see the Chrome / Playwright mode sections below. |
+| `salesforce.case_source` | `"api"` | `"chrome"` or `"scrape"` reads the Lightning case list from a logged-in browser; needs `salesforce.instance_url`. |
 | `salesforce.mine_only` | `false` | Show only cases you own, instead of every case you can see. |
 | `salesforce.api_version` | `v61.0` | Salesforce REST API version. |
 | `limits.emails` / `.events` / `.chats` / `.cases` | 8 / 4 / 8 / 8 | How many rows per card. |
@@ -134,12 +134,67 @@ widen the grant — the stored token carries whatever scopes you consented to.
 This is also the fastest way to find out *which* scope an admin is blocking:
 connect with one feature at a time.
 
-## Browser-scrape mode (when the API is blocked)
+## Chrome mode (managed devices — no install)
 
-Some Workspace orgs only allow *approved* OAuth apps to read mail, so the Gmail
-API path returns `access_denied` no matter how the client is set up. As a
-fallback, the dashboard can read Gmail (and Salesforce cases) out of a **real
-browser you log into yourself**, with no OAuth involved.
+On a locked-down device the API can be blocked *and* so can installing anything
+(pip, Playwright, browser binaries), and Google's **Context-Aware Access** may
+allow only your real, verified Chrome to reach the data at all. For that case the
+dashboard can read Gmail and the Salesforce case list straight out of **the
+Chrome you're already logged into**, over Chrome's built-in DevTools debug port.
+Nothing is installed — it uses only Python's standard library.
+
+**1. Start Chrome with a debug port.** Quit Chrome fully first, then:
+
+```bat
+:: Windows
+"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
+  --remote-debugging-port=9222 ^
+  --user-data-dir="%USERPROFILE%\dashboard-chrome"
+```
+```bash
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir="$HOME/dashboard-chrome"
+```
+
+The debug port is refused on Chrome's *default* profile directory (a security
+fix), so `--user-data-dir` points at a separate one. **The first time**, sign
+into your Google (and Salesforce) accounts in that window — and if your org
+requires the *EndPoint Verification* extension for access, add it here and let it
+sync, or this profile will hit the same access-block. It's a normal Chrome
+profile; the login sticks between runs.
+
+**2. Check the connection**, with that Chrome still running:
+
+```bash
+python3 chrome_cdp.py targets                    # lists your open tabs
+python3 chrome_cdp.py html mail.google.com       # dumps the Gmail tab's HTML
+```
+
+**3. Point the cards at it** in `config.json`:
+
+```json
+"google":     { "features": ["calendar", "chat"], "email_source": "chrome" },
+"salesforce": { "case_source": "chrome", "instance_url": "https://your-domain.my.salesforce.com" }
+```
+
+Run `python3 server.py` (Chrome stays open in the background). The port is
+configurable with `DASHBOARD_CHROME_PORT`. If a card is empty or mislabeled the
+markup has shifted — set `DASHBOARD_SCRAPE_DEBUG=1` to dump `last-gmail.html` /
+`last-salesforce.html`, and the selectors in `gmail_html.py` / `salesforce_dom.py`
+can be re-tuned against the real sample.
+
+> **Unvalidated end to end.** The DevTools/WebSocket client is unit-tested, but
+> the author has no managed Chrome to run the full path against, and scraped
+> markup is brittle. Treat it as a working starting point to tune, not a
+> finished feature. The API path is the supported one.
+
+## Playwright-scrape mode (when the API is blocked)
+
+Where installing is allowed but the API isn't, the dashboard can instead read
+Gmail (and Salesforce cases) out of a **browser Playwright launches and you log
+into**. On a device with Context-Aware Access this browser may be refused for
+not being the verified one — prefer *Chrome mode* above there.
 
 > **Status: unvalidated.** This path was written but never run end-to-end by the
 > author — Gmail's basic-HTML markup and Salesforce's Lightning DOM change
