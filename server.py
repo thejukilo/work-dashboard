@@ -176,8 +176,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _auth_callback(self, provider, cfg, query):
         if query.get("error"):
+            code = query["error"][0]
+            detail = query.get("error_description", [code])[0]
             self._page("Connection cancelled",
-                       query.get("error_description", [query["error"][0]])[0], 400)
+                       detail + consent_hint(code, provider, cfg), 400)
             return
         state = (query.get("state") or [""])[0]
         code = (query.get("code") or [""])[0]
@@ -259,11 +261,29 @@ HINTS = [
     ("insufficient authentication scopes", "Scope missing from the grant — add it on the consent screen, then reconnect."),
     ("insufficient permission", "Scope missing from the grant — add it on the consent screen, then reconnect."),
     ("caller does not have permission", "Your Workspace admin may not allow this API for user accounts."),
+    ("admin_policy_enforced", "Your Workspace admin must trust this OAuth client id before it can read the data."),
+    ("access_denied", "Consent was refused — by you, or by an organisation policy on the account."),
     ("invalid_session_id", "Salesforce session expired — reconnect from the dashboard."),
     ("invalid_client", "Check the client id/secret, and give a new connected app ~10 minutes to propagate."),
     ("invalid_grant", "The stored grant is no longer valid — reconnect from the dashboard."),
     ("no instance_url", "Reconnect Salesforce; the stored token predates the instance URL."),
 ]
+
+
+def consent_hint(error_code, provider, cfg):
+    """Explain the consent-screen rejections that a managed org produces."""
+    blocked = ("admin_policy_enforced", "access_denied", "org_internal",
+               "disallowed_useragent")
+    if error_code not in blocked:
+        return ""
+    client_id = cfg[provider]["client_id"] or "(the client id in config.json)"
+    return (
+        "<br><br>Your organisation controls which apps may read this data. "
+        "An administrator can allow it by trusting this OAuth client id:"
+        f"<br><code style='color:#2bd4a0;word-break:break-all'>{client_id}</code>"
+        "<br><br>Everything the app requests is read-only, and the data never "
+        "leaves this machine."
+    )
 
 
 def _hint(message):

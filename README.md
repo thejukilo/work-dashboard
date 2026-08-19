@@ -136,6 +136,12 @@ expired. Click Connect again; `tokens.json` is rewritten.
 **Chat card returns 403** — check the *Google Chat API* is enabled on the project
 and that your Workspace admin permits Chat API access for user accounts.
 
+**"Access blocked" / `admin_policy_enforced` on the Google consent screen** — a
+managed Workspace decides which apps may read its data, and yours isn't trusted
+yet. The page that appears shows the OAuth client id an administrator needs to
+allow (Admin console → Security → Access and data control → API controls). This
+is a permission to request, not something the app can work around.
+
 **`redirect_uri_mismatch`** — the URI in the Google/Salesforce client must match
 `http://localhost:8766/auth/<provider>/callback` character for character. If you
 changed `DASHBOARD_PORT`, update the registered URI to match.
