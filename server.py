@@ -69,8 +69,8 @@ def section(fetch):
     except auth.NeedsAuth as exc:
         return {"ok": False, "items": [], "error": str(exc), "needs_auth": True}
     except http.HttpError as exc:
-        needs_auth = exc.status in (401, 403)
-        return {"ok": False, "items": [], "error": str(exc), "needs_auth": needs_auth}
+        return {"ok": False, "items": [], "error": str(exc),
+                "needs_auth": exc.status == 401}
     except Exception as exc:                                  # never blank the page
         return {"ok": False, "items": [], "error": f"{type(exc).__name__}: {exc}",
                 "needs_auth": False}

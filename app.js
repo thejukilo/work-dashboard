@@ -78,11 +78,11 @@ function priorityClass(item) {
 // --------------------------------------------------------------------------- //
 // Not being connected yet isn't an error — say so quietly, and only offer the
 // "Connect" link once an OAuth client actually exists for that provider.
-function notConnected(provider) {
+function notConnected(provider, message) {
   const link = providers[provider]?.configured
     ? `<a class="fix" href="/auth/${provider}/start">Connect ${LABELS[provider]} →</a>`
     : "";
-  return `<p class="empty">Not connected to ${LABELS[provider]} yet.${link}</p>`;
+  return `<p class="empty">${esc(message || `Not connected to ${LABELS[provider]} yet.`)}${link}</p>`;
 }
 
 function providerFor(name) {
@@ -103,7 +103,7 @@ function renderSection(name, section, emptyText, rowsHtml) {
     target.innerHTML = section.off
       ? `<p class="empty">${esc(section.error)}</p>`
       : section.needs_auth
-        ? notConnected(providerFor(name))
+        ? notConnected(providerFor(name), section.error)
         : `<p class="error">${esc(section.error || "Something went wrong.")}</p>`;
     return;
   }
@@ -168,7 +168,7 @@ function renderEvents(section) {
     target.innerHTML = section.off
       ? `<p class="empty">${esc(section.error)}</p>`
       : section.needs_auth
-        ? notConnected("google")
+        ? notConnected("google", section.error)
         : `<p class="error">${esc(section.error)}</p>`;
     return;
   }

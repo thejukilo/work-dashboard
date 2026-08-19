@@ -37,6 +37,7 @@ ALL_GOOGLE_FEATURES = list(GOOGLE_FEATURE_SCOPES)
 SALESFORCE_SCOPES = ["api", "refresh_token"]
 
 PROVIDERS = ("google", "salesforce")
+LABELS = {"google": "Google Workspace", "salesforce": "Salesforce"}
 
 DEFAULT_CONFIG = {
     "google": {"client_id": "", "client_secret": "",
@@ -69,7 +70,7 @@ class NeedsAuth(Exception):
 
     def __init__(self, provider, message=None):
         self.provider = provider
-        super().__init__(message or f"Not connected to {provider}")
+        super().__init__(message or f"Not connected to {LABELS[provider]} yet.")
 
 
 # --------------------------------------------------------------------------- #
@@ -230,7 +231,7 @@ def _normalize(provider, payload):
 def credentials(provider, cfg):
     """Return usable credentials, refreshing the access token when stale."""
     if not is_configured(provider, cfg):
-        raise NeedsAuth(provider, f"No {provider} client_id configured")
+        raise NeedsAuth(provider, f"No {provider} client_id in config.json.")
 
     toks = stored(provider)
     if not toks.get("refresh_token"):
@@ -251,7 +252,7 @@ def credentials(provider, cfg):
     except http.HttpError as exc:
         if exc.status in (400, 401):
             forget(provider)          # revoked or expired — make the UI re-ask
-            raise NeedsAuth(provider, f"{provider} access was revoked, reconnect") from None
+            raise NeedsAuth(provider, f"{LABELS[provider]} access was revoked — reconnect.") from None
         raise
 
     fresh = _normalize(provider, payload)
