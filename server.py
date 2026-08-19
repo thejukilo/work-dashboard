@@ -270,6 +270,8 @@ FEED_LABELS = {
 # Failure text → the thing that actually needs fixing. Ordered: first match wins.
 HINTS = [
     ("has not been used in project", "Enable that API in the Google Cloud console, wait a minute, retry."),
+    ("access_not_configured", "Either that API isn't enabled on the client id's project, or your org "
+                              "blocks the scope — connect one google.features entry at a time to tell which."),
     ("api has not been enabled", "Enable that API in the Google Cloud console, wait a minute, retry."),
     ("insufficient authentication scopes", "Scope missing from the grant — add it on the consent screen, then reconnect."),
     ("insufficient permission", "Scope missing from the grant — add it on the consent screen, then reconnect."),
