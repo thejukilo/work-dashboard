@@ -147,12 +147,22 @@ browser you log into yourself**, with no OAuth involved.
 > it as a starting point you may need to tune, not a finished feature. The
 > API path is the supported one.
 
-It needs Playwright and a browser:
+It needs Playwright and a browser. On most systems the system Python is
+"externally managed" and `pip install` is refused (PEP 668), so install into a
+virtual environment:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install playwright
-playwright install chromium      # or rely on an installed Chrome (used by default)
+playwright install chromium        # skip if you have Chrome — it's used by default
 ```
+
+Run everything below (`scraper.py`, `server.py`) with that venv **active**, so
+`import playwright` resolves. The rest of the dashboard is standard-library only
+and runs fine under the venv's Python too. To use your installed Chrome and skip
+the `playwright install` download, that's already the default; force the bundled
+Chromium instead with `DASHBOARD_BROWSER_CHANNEL=` (empty).
 
 Log in once per provider — a real Chrome window opens and you sign in exactly as
 you would by hand (SSO, MFA, everything):
