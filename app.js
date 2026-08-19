@@ -1,264 +1,271 @@
-// ============================================================================
-// RSRA Token — friendly front-end for rsra.roche.com/Token/Generate
+// Work Dashboard — renders whatever /api/overview hands back.
 //
-// Flow:
-//   1. GET  /Token/Create?UseCase=<x>   → scrape the live __RequestVerification-
-//                                          Token AND the form's default fields.
-//   2. POST /Token/Generate             → submit exactly what the real form would.
-//   3. Parse the token out of the response HTML and render it as a Code 128 barcode.
-//
-// The /Token/* requests are same-origin. Run `python serve.py`: it serves this
-// app on localhost and reverse-proxies /Token/* to RSRA with your session
-// cookies, so there's no CORS/SameSite wall. (Deploying behind a roche.com
-// origin works too.) See README.md for setup + the `?debug` / demo escapes.
-// ============================================================================
-
-import { renderBarcode } from "./code128.js";
-
-const CONFIG = {
-  // Base URL of the RSRA site. "" = same origin (the intended deployment).
-  // Override via ?base=https://rsra.roche.com only if you have a CORS-enabled proxy.
-  base: new URLSearchParams(location.search).get("base") ?? "",
-
-  // The single user-facing setting: which token to generate.
-  // Add entries here as RSRA exposes more use cases.
-  useCases: ["Authentication"],
-
-  // Default validity if the Create form doesn't supply one (days from today).
-  defaultExpiryDays: 14,
-};
+// Every section arrives as {ok, items, error, needs_auth}, so a provider being
+// down or disconnected only ever costs you that one card.
 
 const DEMO = new URLSearchParams(location.search).has("demo");
-const DEBUG = new URLSearchParams(location.search).has("debug");
+const REFRESH_MS = 60_000;
+const qs = DEMO ? "?demo" : "";
 
-// ---------------------------------------------------------------------------
-// DOM
-// ---------------------------------------------------------------------------
-const els = {
-  useCase: document.getElementById("useCase"),
-  status: document.getElementById("status"),
-  result: document.getElementById("result"),
-  barcode: document.getElementById("barcode"),
-  tokenText: document.getElementById("tokenText"),
-  meta: document.getElementById("meta"),
-  copyBtn: document.getElementById("copyBtn"),
-  regenBtn: document.getElementById("regenBtn"),
-};
+const el = (id) => document.getElementById(id);
+let refreshTimer = null;
+let tickTimer = null;
+let providers = {};
 
-function initUseCases() {
-  els.useCase.innerHTML = "";
-  for (const uc of CONFIG.useCases) {
-    const opt = document.createElement("option");
-    opt.value = uc;
-    opt.textContent = uc;
-    els.useCase.appendChild(opt);
+// --------------------------------------------------------------------------- //
+// Formatting
+// --------------------------------------------------------------------------- //
+const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function clock(date) {
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function ago(iso) {
+  if (!iso) return "";
+  const then = new Date(iso), diff = Date.now() - then.getTime();
+  if (diff < MINUTE) return "just now";
+  if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m ago`;
+  if (diff < DAY) return `${Math.floor(diff / HOUR)}h ago`;
+  if (diff < 2 * DAY) return "yesterday";
+  if (diff < 7 * DAY) return `${Math.floor(diff / DAY)}d ago`;
+  return then.toLocaleDateString([], { day: "numeric", month: "short" });
+}
+
+// "in 25 min" / "in progress · 20 min left" / "tomorrow at 09:00"
+function whenLabel(event) {
+  const now = Date.now();
+  const start = new Date(event.start).getTime();
+  const end = event.end ? new Date(event.end).getTime() : start + HOUR;
+
+  if (now >= start && now < end) {
+    return { text: `in progress · ${Math.round((end - now) / MINUTE)} min left`, live: true };
   }
-}
+  const until = start - now;
+  if (event.all_day) return { text: until < DAY ? "today · all day" : "all day", live: false };
+  if (until < MINUTE) return { text: "starting now", live: true };
+  if (until < HOUR) return { text: `in ${Math.round(until / MINUTE)} min`, live: false };
 
-function setStatus(msg, kind = "info") {
-  els.status.textContent = msg ?? "";
-  els.status.dataset.kind = kind;
-  els.status.hidden = !msg;
-}
-
-function showResult(show) {
-  els.result.hidden = !show;
-}
-
-// ---------------------------------------------------------------------------
-// Token generation
-// ---------------------------------------------------------------------------
-
-/** Pick the <form> that posts to /Token/Generate (fallbacks for safety). */
-function findGenerateForm(doc) {
-  return (
-    doc.querySelector('form[action*="Token/Generate" i]') ||
-    [...doc.querySelectorAll("form")].find((f) =>
-      f.querySelector('[name="__RequestVerificationToken"]'),
-    ) ||
-    doc.querySelector("form")
-  );
-}
-
-/**
- * Serialize a form exactly as a browser would on submit: every successful
- * control, including ASP.NET's hidden `false` fallbacks for checkboxes (which
- * are plain hidden inputs and therefore always included). Checkboxes/radios are
- * only included when checked. Submit buttons are skipped.
- */
-function serializeForm(form) {
-  const params = new URLSearchParams();
-  for (const el of form.elements) {
-    if (!el.name || el.disabled) continue;
-    const type = (el.type || "").toLowerCase();
-    if (type === "submit" || type === "button" || type === "reset" || type === "file") continue;
-    if ((type === "checkbox" || type === "radio") && !el.checked) continue;
-    if (el.tagName === "SELECT") {
-      params.append(el.name, el.value);
-    } else {
-      params.append(el.name, el.value ?? "");
-    }
-  }
-  return params;
-}
-
-/** Best-effort extraction of the generated token from the response HTML. */
-function extractToken(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-
-  // 1) An element explicitly marked as the token (id/name/data-* hint).
-  const marked = doc.querySelector(
-    '[id*="token" i], [name*="token" i], [data-token], [class*="token" i]',
-  );
-  const fromMarked = readValue(marked);
-  if (fromMarked) return fromMarked;
-
-  // 2) A readonly/disabled input or textarea (common for "copy this" fields).
-  for (const el of doc.querySelectorAll("input[readonly], input[disabled], textarea")) {
-    const v = readValue(el);
-    if (v && looksLikeToken(v)) return v;
-  }
-
-  // 3) <code>/<pre> block holding a token-shaped string.
-  for (const el of doc.querySelectorAll("code, pre, kbd, samp")) {
-    const v = (el.textContent || "").trim();
-    if (looksLikeToken(v)) return v;
-  }
-
-  return null;
-}
-
-function readValue(el) {
-  if (!el) return null;
-  const v = (el.value ?? el.getAttribute?.("data-token") ?? el.textContent ?? "").trim();
-  return v || null;
-}
-
-/** Heuristic: a long, mostly-opaque token-ish string (tunable once we see a real one). */
-function looksLikeToken(s) {
-  return typeof s === "string" && s.length >= 16 && /^[\w\-.+/=]+$/.test(s);
-}
-
-function demoToken() {
-  // Deterministic-ish sample so the UI + barcode are visible without Roche.
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  let s = "";
-  for (let i = 0; i < 40; i++) {
-    s += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return s;
-}
-
-function defaultExpiryISO() {
-  const d = new Date();
-  d.setDate(d.getDate() + CONFIG.defaultExpiryDays);
-  return d.toISOString().slice(0, 10);
-}
-
-async function generate(useCase) {
-  if (DEMO) {
-    return { token: demoToken(), useCase, expirationDate: defaultExpiryISO() };
-  }
-
-  // 1. Load the Create form for this use case.
-  const createUrl = `${CONFIG.base}/Token/Create?UseCase=${encodeURIComponent(useCase)}`;
-  const createRes = await fetch(createUrl, {
-    credentials: "include",
-    headers: { accept: "text/html" },
-  });
-  if (createRes.status === 401 || createRes.status === 403 || createRes.redirected) {
-    throw new Error("Not signed in to RSRA. Open rsra.roche.com, log in, then retry.");
-  }
-  if (!createRes.ok) throw new Error(`Could not load the token form (HTTP ${createRes.status}).`);
-
-  const createHtml = await createRes.text();
-  const form = findGenerateForm(new DOMParser().parseFromString(createHtml, "text/html"));
-  if (!form) throw new Error("Token form not found on the RSRA page (layout may have changed).");
-
-  const body = serializeForm(form);
-  body.set("UseCase", useCase); // the one thing the user chose
-  if (!body.has("ExpirationDate")) body.set("ExpirationDate", defaultExpiryISO());
-
-  // 2. Submit it.
-  const genRes = await fetch(`${CONFIG.base}/Token/Generate`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html" },
-    body: body.toString(),
-  });
-  if (!genRes.ok) throw new Error(`Token generation failed (HTTP ${genRes.status}).`);
-
-  const genHtml = await genRes.text();
-  if (DEBUG) {
-    // Surface the raw response so the extraction rule can be finalized.
-    console.log("[rsra-token] /Token/Generate response:\n", genHtml);
-  }
-
-  const token = extractToken(genHtml);
-  if (!token) {
-    throw new Error(
-      "Token generated, but couldn't be located in the response. " +
-        "Re-run with ?debug and share the logged HTML so extraction can be tuned.",
-    );
-  }
+  const startDate = new Date(start);
+  const midnight = new Date(); midnight.setHours(24, 0, 0, 0);
+  if (start < midnight.getTime()) return { text: `today at ${clock(startDate)}`, live: false };
+  if (start < midnight.getTime() + DAY) return { text: `tomorrow at ${clock(startDate)}`, live: false };
   return {
-    token,
-    useCase,
-    expirationDate: body.get("ExpirationDate") || defaultExpiryISO(),
+    text: startDate.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })
+          + ` at ${clock(startDate)}`,
+    live: false,
   };
 }
 
-// ---------------------------------------------------------------------------
-// UI wiring
-// ---------------------------------------------------------------------------
+const LABELS = { google: "Google Workspace", salesforce: "Salesforce" };
 
-let lastUseCase = null;
+function priorityClass(item) {
+  if (item.closed) return "done";
+  const p = (item.priority || "").toLowerCase();
+  if (p === "high" || p === "critical" || p === "urgent") return "hot";
+  if (p === "medium") return "warm";
+  return "";
+}
 
-async function run() {
-  const useCase = els.useCase.value;
-  lastUseCase = useCase;
-  localStorage.setItem("rsra.useCase", useCase);
+// --------------------------------------------------------------------------- //
+// Section rendering
+// --------------------------------------------------------------------------- //
+// Not being connected yet isn't an error — say so quietly, and only offer the
+// "Connect" link once an OAuth client actually exists for that provider.
+function notConnected(provider) {
+  const link = providers[provider]?.configured
+    ? `<a class="fix" href="/auth/${provider}/start">Connect ${LABELS[provider]} →</a>`
+    : "";
+  return `<p class="empty">Not connected to ${LABELS[provider]} yet.${link}</p>`;
+}
 
-  showResult(false);
-  setStatus("Generating token…", "info");
+function providerFor(name) {
+  return name === "cases" ? "salesforce" : "google";
+}
 
+function renderSection(name, section, emptyText, rowsHtml) {
+  const target = el(name);
+  const counter = el(`${name}Count`);
+
+  if (!section) {
+    target.innerHTML = `<p class="empty">No data.</p>`;
+    counter.textContent = "";
+    return;
+  }
+  if (!section.ok) {
+    counter.textContent = "";
+    target.innerHTML = section.needs_auth
+      ? notConnected(providerFor(name))
+      : `<p class="error">${esc(section.error || "Something went wrong.")}</p>`;
+    return;
+  }
+  counter.textContent = section.items.length ? `${section.items.length}` : "";
+  target.innerHTML = section.items.length
+    ? `<ul class="list">${section.items.map(rowsHtml).join("")}</ul>`
+    : `<p class="empty">${esc(emptyText)}</p>`;
+}
+
+function emailRow(mail) {
+  return `<li><a class="row ${mail.unread ? "unread" : ""}" href="${esc(mail.url)}" target="_blank" rel="noreferrer">
+    <div class="line1">
+      <span class="who">${esc(mail.from)}</span>
+      <span class="when">${esc(ago(mail.at))}</span>
+    </div>
+    <div class="title">${mail.starred ? "★ " : ""}${esc(mail.subject)}</div>
+    <div class="snippet">${esc(mail.snippet)}</div>
+  </a></li>`;
+}
+
+function caseRow(item) {
+  const pill = priorityClass(item);
+  return `<li><a class="row" href="${esc(item.url)}" target="_blank" rel="noreferrer">
+    <div class="line1">
+      <span class="who">#${esc(item.number)}</span>
+      ${item.status ? `<span class="pill ${pill}">${esc(item.status)}</span>` : ""}
+      <span class="when">${esc(ago(item.at))}</span>
+    </div>
+    <div class="title">${esc(item.subject)}</div>
+    <div class="snippet">${esc([item.account, item.contact, item.priority && `${item.priority} priority`]
+      .filter(Boolean).join(" · "))}</div>
+  </a></li>`;
+}
+
+function chatRow(msg) {
+  return `<li><a class="row" href="${esc(msg.url)}" target="_blank" rel="noreferrer">
+    <div class="line1">
+      <span class="who">${esc(msg.from)}</span>
+      ${msg.direct ? "" : `<span class="pill">${esc(msg.space)}</span>`}
+      <span class="when">${esc(ago(msg.at))}</span>
+    </div>
+    <div class="snippet">${esc(msg.text)}</div>
+  </a></li>`;
+}
+
+function laterRow(event) {
+  const when = whenLabel(event);
+  return `<li><a class="row" href="${esc(event.url || "#")}" target="_blank" rel="noreferrer">
+    <div class="line1">
+      <span class="who">${esc(event.title)}</span>
+      <span class="when">${esc(when.text)}</span>
+    </div>
+  </a></li>`;
+}
+
+function renderEvents(section) {
+  const target = el("events");
+  const counter = el("eventsCount");
+
+  if (!section.ok) {
+    counter.textContent = "";
+    target.innerHTML = section.needs_auth
+      ? notConnected("google")
+      : `<p class="error">${esc(section.error)}</p>`;
+    return;
+  }
+  if (!section.items.length) {
+    counter.textContent = "";
+    target.innerHTML = `<p class="empty">Nothing on the calendar for the next two weeks.</p>`;
+    return;
+  }
+
+  const [next, ...later] = section.items;
+  const when = whenLabel(next);
+  const start = new Date(next.start);
+  const end = next.end ? new Date(next.end) : null;
+  const span = next.all_day ? "all day" : `${clock(start)}${end ? `–${clock(end)}` : ""}`;
+  const meta = [
+    span,
+    next.location,
+    next.attendees > 1 ? `${next.attendees} attendees` : "",
+    next.organizer ? `by ${next.organizer}` : "",
+    next.accepted === false ? "not accepted yet" : "",
+  ].filter(Boolean);
+
+  counter.textContent = later.length ? `+${later.length} later` : "";
+  target.innerHTML = `
+    <div class="countdown">${when.live ? `<span class="pill live">now</span> ` : ""}${esc(when.text)}</div>
+    <div class="hero-title">${esc(next.title)}</div>
+    <div class="hero-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}</div>
+    <div class="hero-actions">
+      ${next.meet_url ? `<a class="primary" href="${esc(next.meet_url)}" target="_blank" rel="noreferrer">Join meeting</a>` : ""}
+      ${next.url ? `<a href="${esc(next.url)}" target="_blank" rel="noreferrer">Open in Calendar</a>` : ""}
+    </div>
+    ${later.length ? `<div class="later"><ul class="list">${later.map(laterRow).join("")}</ul></div>` : ""}`;
+}
+
+// --------------------------------------------------------------------------- //
+// Connect banner
+// --------------------------------------------------------------------------- //
+function renderStatus(status) {
+  el("demoBadge").hidden = !status.demo;
+  providers = status.providers || {};
+
+  const missing = Object.entries(status.providers || {})
+    .filter(([, state]) => !state.connected);
+  const banner = el("connect");
+  if (!missing.length) { banner.classList.remove("show"); return; }
+
+  const unconfigured = missing.filter(([, s]) => !s.configured).map(([n]) => LABELS[n]);
+  const connectable = missing.filter(([, s]) => s.configured);
+
+  el("connectText").textContent = unconfigured.length
+    ? `${unconfigured.join(" and ")} ${unconfigured.length > 1 ? "have" : "has"} no OAuth client yet — see README.md, then restart.`
+    : "Connect your accounts to fill the dashboard.";
+  el("connectButtons").innerHTML = connectable
+    .map(([name]) => `<button class="primary" data-provider="${name}">Connect ${LABELS[name]}</button>`)
+    .join(" ");
+  el("connectButtons").querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => { location.href = `/auth/${btn.dataset.provider}/start`; });
+  });
+  banner.classList.add("show");
+}
+
+// --------------------------------------------------------------------------- //
+// Loading
+// --------------------------------------------------------------------------- //
+async function load() {
   try {
-    const { token, expirationDate } = await generate(useCase);
+    const [overview, status] = await Promise.all([
+      fetch(`/api/overview${qs}`).then((r) => r.json()),
+      fetch(`/api/status${qs}`).then((r) => r.json()),
+    ]);
 
-    els.barcode.replaceChildren(renderBarcode(token));
-    els.tokenText.textContent = token;
-    els.meta.textContent = `${useCase} · expires ${expirationDate}`;
-    showResult(true);
-    setStatus("");
+    renderStatus(status);
+    const s = overview.sections;
+    renderEvents(s.events);
+    renderSection("emails", s.emails, "Inbox is clear.", emailRow);
+    renderSection("cases", s.cases, "No cases found.", caseRow);
+    renderSection("chats", s.chats, "No recent messages.", chatRow);
+
+    el("updated").textContent = `updated ${clock(new Date(overview.generated_at))}`;
+    window.__events = s.events;   // kept so the ticker can re-render the countdown
   } catch (err) {
-    showResult(false);
-    setStatus(err instanceof Error ? err.message : String(err), "error");
+    el("updated").textContent = "could not reach the local server";
+    console.error(err);
   }
 }
 
-async function copyToken() {
-  try {
-    await navigator.clipboard.writeText(els.tokenText.textContent || "");
-    const prev = els.copyBtn.textContent;
-    els.copyBtn.textContent = "Copied ✓";
-    setTimeout(() => (els.copyBtn.textContent = prev), 1500);
-  } catch {
-    setStatus("Couldn't copy — select the token text manually.", "error");
-  }
+function startTimers() {
+  clearInterval(refreshTimer);
+  clearInterval(tickTimer);
+  refreshTimer = setInterval(load, REFRESH_MS);
+  // Keep "in 25 min" honest between full refreshes.
+  tickTimer = setInterval(() => {
+    if (window.__events?.ok && window.__events.items.length) renderEvents(window.__events);
+  }, 30_000);
 }
 
-function init() {
-  initUseCases();
-  const saved = localStorage.getItem("rsra.useCase");
-  if (saved && CONFIG.useCases.includes(saved)) els.useCase.value = saved;
+el("refreshBtn").addEventListener("click", () => { load(); startTimers(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { clearInterval(refreshTimer); clearInterval(tickTimer); }
+  else { load(); startTimers(); }
+});
 
-  if (DEMO) setStatus("Demo mode — showing a sample token (not from RSRA).", "info");
-
-  els.useCase.addEventListener("change", run);
-  els.regenBtn.addEventListener("click", run);
-  els.copyBtn.addEventListener("click", copyToken);
-
-  run(); // auto-generate on load → "one setting → barcode"
-}
-
-init();
+load();
+startTimers();

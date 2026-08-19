@@ -1,0 +1,19 @@
+{
+  "google": {
+    "client_id": "1234567890-abcdefg.apps.googleusercontent.com",
+    "client_secret": "GOCSPX-xxxxxxxxxxxxxxxxxxxx"
+  },
+  "salesforce": {
+    "client_id": "3MVG9...your connected app consumer key...",
+    "client_secret": "your connected app consumer secret",
+    "login_url": "https://login.salesforce.com",
+    "api_version": "v61.0",
+    "mine_only": false
+  },
+  "limits": {
+    "emails": 8,
+    "events": 4,
+    "chats": 8,
+    "cases": 8
+  }
+}

@@ -1,76 +1,132 @@
-# RSRA Token
+# Work Dashboard
 
-A small, friendly front-end for `rsra.roche.com/Token/Generate`. You pick **one
-thing** — the token type — and it renders the resulting token as a **Code 128
-barcode** you can scan straight off the screen (e.g. into an x800 system).
+One screen, four answers:
 
-Run it locally with one command — no hosting, no build step.
+* **Latest emails** — Gmail inbox, unread marked
+* **Next appointment** — the very next thing on your calendar, with a countdown, a Join button, and what follows it
+* **Last cases in Salesforce** — most recently touched cases, with status and priority
+* **Latest chat messages** — newest Google Chat messages across your spaces and DMs
+
+Everything is **read-only**. The app runs on your own machine, talks straight to
+Google and Salesforce, and stores nothing anywhere else.
+
+![the dashboard](docs/screenshot.png)
 
 | File | What it is |
 | --- | --- |
-| `serve.py` | Local host + reverse proxy (Python stdlib). **This is what you run.** |
-| `index.html` | The UI (one dropdown → barcode). |
-| `app.js` | Talks to RSRA (via the proxy) and drives the UI. |
-| `code128.js` | Zero-dependency Code 128 encoder → SVG. |
+| `server.py` | Local server + OAuth endpoints + the API calls. **This is what you run.** |
+| `auth.py` | OAuth 2.0 (authorization code + PKCE) and the token store. |
+| `sources.py` | The four feeds: Gmail, Calendar, Chat, Salesforce. |
+| `httpclient.py` | Tiny JSON-over-HTTPS helper. |
+| `demo.py` | Sample data for `?demo`. |
+| `index.html` / `app.js` | The UI. |
 
-## Run it
+Python 3.9+, standard library only — no `pip install`, no build step.
+
+## Try it in ten seconds
 
 ```bash
-python serve.py
+python3 server.py --demo
 ```
 
-It serves the app at <http://localhost:8765>, opens your browser, and
-reverse-proxies `/Token/*` to RSRA. Pick a token type → barcode.
+Opens <http://localhost:8766/?demo> with realistic sample data, so you can see
+the whole thing before handing over any credentials.
 
-### Why a proxy (and not just open the .html)?
+## Run it for real
 
-A page opened from disk can't read RSRA's responses (**CORS**) and can't send
-your session cookie (**SameSite**) — those are browser-only rules. `serve.py`
-sidesteps both: the browser only talks to `localhost`, and the script makes the
-real call to RSRA **server-side**, where neither rule applies.
+```bash
+cp config.example.json config.json   # then fill in the two client ids
+python3 server.py
+```
 
-### Cookies (so the proxy is authenticated)
+Open <http://localhost:8766>, click **Connect Google Workspace** and **Connect
+Salesforce** once, and you're done — refresh tokens are kept in `tokens.json`
+(chmod 600, gitignored) so you never log in again.
 
-`serve.py` needs your logged-in `rsra.roche.com` session. In order of preference:
+### Google Workspace (email, calendar, chat)
 
-1. **Auto (recommended):** `pip install browser_cookie3`, make sure you're
-   logged in to RSRA in your browser, then run `serve.py`. It reads the
-   roche.com cookies for you. Pick the browser with
-   `RSRA_BROWSER=chrome|edge|firefox` if needed.
-   *(Note: latest Chrome on Windows encrypts its cookie store; if auto fails,
-   use Edge/Firefox or the paste method below.)*
-2. **Paste once:** copy the `cookie` header from DevTools → Network → any RSRA
-   request, then either
-   - `RSRA_COOKIE="PF=...; .AspNetCore.cookieC1=...; ..."`, or
-   - save it to `rsra_cookie.txt` next to `serve.py`.
+In the [Google Cloud console](https://console.cloud.google.com), on any project:
 
-Env knobs: `RSRA_PORT` (default 8765), `RSRA_BASE` (default
-`https://rsra.roche.com`), `RSRA_INSECURE=1` (skip TLS verify — last resort).
+1. **Enable three APIs** — *Gmail API*, *Google Calendar API*, *Google Chat API*.
+2. **OAuth consent screen** → *Internal* if this is your work Workspace account
+   (otherwise *External*, and add yourself as a test user). Add these scopes:
 
-## Try it with no Roche at all
+   ```
+   .../auth/gmail.readonly
+   .../auth/calendar.readonly
+   .../auth/chat.spaces.readonly
+   .../auth/chat.messages.readonly
+   ```
 
-Open <http://localhost:8765/?demo> (or `index.html?demo`). Demo mode shows a
-sample token + barcode so you can sanity-check the UI and that it scans.
+3. **Credentials → Create credentials → OAuth client ID → Web application**, with
+   this authorized redirect URI, exactly:
 
-## Finalizing token extraction
+   ```
+   http://localhost:8766/auth/google/callback
+   ```
 
-`extractToken()` in `app.js` uses robust heuristics but hasn't been matched
-against a **real** `/Token/Generate` response yet. To lock it in:
+4. Put the client ID and secret in `config.json` under `google`.
 
-1. Open the app with `?debug`.
-2. Generate a token.
-3. Copy the `[rsra-token] /Token/Generate response:` HTML logged to the console
-   (redact the token value) and share it — extraction becomes a one-line selector.
+### Salesforce (cases)
 
-## Configuration (`app.js`)
+In **Setup → App Manager → New Connected App**:
 
-- `CONFIG.useCases` — the dropdown options. Only `Authentication` is known so
-  far; add the others once confirmed.
-- `CONFIG.defaultExpiryDays` — fallback validity if the form doesn't supply one.
-- `CONFIG.base` — leave `""` (same-origin); the proxy handles the rest.
+1. Tick **Enable OAuth Settings**, callback URL:
 
-## Open questions
+   ```
+   http://localhost:8766/auth/salesforce/callback
+   ```
 
-- **Barcode symbology:** Code 128 (confirmed).
-- **Other token types:** only `Authentication` is wired up; send the full list.
-- **`/Token/Generate` response shape** — needed to finalize extraction (see above).
+2. Selected scopes: **Manage user data via APIs (`api`)** and **Perform requests
+   at any time (`refresh_token`, `offline_access`)**.
+3. Leave **Require Proof Key for Code Exchange (PKCE)** enabled — the app sends it.
+4. Copy the consumer key/secret into `config.json` under `salesforce`. If you turn
+   *Require Secret for Web Server Flow* off, leave `client_secret` empty.
+5. Set `login_url` to `https://login.salesforce.com`, or `https://test.salesforce.com`
+   for a sandbox, or your My Domain URL.
+
+A brand-new connected app can take ~10 minutes before it accepts logins.
+
+## Configuration (`config.json`)
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `salesforce.mine_only` | `false` | Show only cases you own, instead of every case you can see. |
+| `salesforce.api_version` | `v61.0` | Salesforce REST API version. |
+| `limits.emails` / `.events` / `.chats` / `.cases` | 8 / 4 / 8 / 8 | How many rows per card. |
+
+Anything in `config.json` can also come from the environment — handy if you'd
+rather not keep secrets in a file:
+
+```
+GOOGLE_CLIENT_ID  GOOGLE_CLIENT_SECRET
+SF_CLIENT_ID      SF_CLIENT_SECRET      SF_LOGIN_URL      SF_API_VERSION
+DASHBOARD_PORT    DASHBOARD_CONFIG      DASHBOARD_TOKENS
+```
+
+## How it hangs together
+
+The browser only ever talks to `localhost`. `server.py` holds the tokens and
+makes the Google and Salesforce calls itself, which sidesteps CORS entirely and
+keeps access tokens out of the page. The four feeds are fetched in parallel and
+each one is wrapped on its own, so a Salesforce outage or an expired Google
+grant costs you that one card and nothing else — the card tells you what broke
+and offers a **Connect** link when reconnecting is the fix.
+
+The page refreshes every minute, pauses while the tab is in the background, and
+re-renders the countdown on the next appointment every 30 seconds in between.
+
+## Troubleshooting
+
+**"Not connected to … yet" that won't go away** — the OAuth grant was revoked or
+expired. Click Connect again; `tokens.json` is rewritten.
+
+**Chat card returns 403** — check the *Google Chat API* is enabled on the project
+and that your Workspace admin permits Chat API access for user accounts.
+
+**`redirect_uri_mismatch`** — the URI in the Google/Salesforce client must match
+`http://localhost:8766/auth/<provider>/callback` character for character. If you
+changed `DASHBOARD_PORT`, update the registered URI to match.
+
+**Emails or cases look stale** — hit Refresh; the countdown ticks on its own but
+the feeds only reload once a minute.
