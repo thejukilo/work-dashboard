@@ -23,18 +23,24 @@ CONFIG_PATH = Path(os.environ.get("DASHBOARD_CONFIG", HERE / "config.json"))
 TOKENS_PATH = Path(os.environ.get("DASHBOARD_TOKENS", HERE / "tokens.json"))
 
 # Read-only scopes: the dashboard shows things, it never sends or changes them.
-GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/chat.spaces.readonly",
-    "https://www.googleapis.com/auth/chat.messages.readonly",
-]
+# Grouped per card, because a managed Workspace may allow some and not others —
+# gmail.readonly in particular is a *restricted* scope and is the one most often
+# held back. Drop a feature from google.features and its scope is never asked
+# for, so the rest of the dashboard can still connect.
+GOOGLE_FEATURE_SCOPES = {
+    "gmail": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "calendar": ["https://www.googleapis.com/auth/calendar.readonly"],
+    "chat": ["https://www.googleapis.com/auth/chat.spaces.readonly",
+             "https://www.googleapis.com/auth/chat.messages.readonly"],
+}
+ALL_GOOGLE_FEATURES = list(GOOGLE_FEATURE_SCOPES)
 SALESFORCE_SCOPES = ["api", "refresh_token"]
 
 PROVIDERS = ("google", "salesforce")
 
 DEFAULT_CONFIG = {
-    "google": {"client_id": "", "client_secret": ""},
+    "google": {"client_id": "", "client_secret": "",
+               "features": ["gmail", "calendar", "chat"]},
     "salesforce": {
         "client_id": "",
         "client_secret": "",
@@ -92,6 +98,19 @@ def load_config():
 
 def is_configured(provider, cfg):
     return bool(cfg[provider]["client_id"])
+
+
+def google_features(cfg):
+    """Which Google cards are switched on, in a stable order."""
+    wanted = cfg["google"].get("features") or ALL_GOOGLE_FEATURES
+    return [f for f in ALL_GOOGLE_FEATURES if f in wanted]
+
+
+def google_scopes(cfg):
+    scopes = []
+    for feature in google_features(cfg):
+        scopes.extend(GOOGLE_FEATURE_SCOPES[feature])
+    return scopes
 
 
 # --------------------------------------------------------------------------- #
@@ -157,7 +176,7 @@ def _endpoints(provider, cfg):
 
 def authorize_url(provider, cfg, redirect_uri, state, challenge):
     auth_url, _ = _endpoints(provider, cfg)
-    scopes = GOOGLE_SCOPES if provider == "google" else SALESFORCE_SCOPES
+    scopes = google_scopes(cfg) if provider == "google" else SALESFORCE_SCOPES
     params = {
         "client_id": cfg[provider]["client_id"],
         "redirect_uri": redirect_uri,

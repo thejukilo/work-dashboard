@@ -1,7 +1,8 @@
 {
   "google": {
     "client_id": "1234567890-abcdefg.apps.googleusercontent.com",
-    "client_secret": "GOCSPX-xxxxxxxxxxxxxxxxxxxx"
+    "client_secret": "GOCSPX-xxxxxxxxxxxxxxxxxxxx",
+    "features": ["gmail", "calendar", "chat"]
   },
   "salesforce": {
     "client_id": "3MVG9...your connected app consumer key...",

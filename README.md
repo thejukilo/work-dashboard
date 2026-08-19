@@ -101,6 +101,7 @@ A brand-new connected app can take ~10 minutes before it accepts logins.
 
 | Key | Default | What it does |
 | --- | --- | --- |
+| `google.features` | all three | Which Google cards to run: `"gmail"`, `"calendar"`, `"chat"`. A card you drop is never asked for at consent time — see below. |
 | `salesforce.mine_only` | `false` | Show only cases you own, instead of every case you can see. |
 | `salesforce.api_version` | `v61.0` | Salesforce REST API version. |
 | `limits.emails` / `.events` / `.chats` / `.cases` | 8 / 4 / 8 / 8 | How many rows per card. |
@@ -113,6 +114,23 @@ GOOGLE_CLIENT_ID  GOOGLE_CLIENT_SECRET
 SF_CLIENT_ID      SF_CLIENT_SECRET      SF_LOGIN_URL      SF_API_VERSION
 DASHBOARD_PORT    DASHBOARD_CONFIG      DASHBOARD_TOKENS
 ```
+
+### Connecting only part of Google
+
+`gmail.readonly` is a *restricted* scope; `calendar.readonly` is merely
+sensitive. A managed Workspace often treats them differently, so one blocked
+scope shouldn't cost you the other two cards. Drop the blocked one:
+
+```json
+"google": { "features": ["calendar", "chat"] }
+```
+
+Those scopes are then never requested, the matching cards say so plainly, and
+the rest connects normally. Add the feature back and click Connect again to
+widen the grant — the stored token carries whatever scopes you consented to.
+
+This is also the fastest way to find out *which* scope an admin is blocking:
+connect with one feature at a time.
 
 ## How it hangs together
 
@@ -132,6 +150,12 @@ Run `python3 server.py --check` first — it usually names the problem outright.
 
 **"Not connected to … yet" that won't go away** — the OAuth grant was revoked or
 expired. Click Connect again; `tokens.json` is rewritten.
+
+**`access_not_configured` at the consent screen** — one of the requested scopes
+belongs to an API that isn't enabled on the project that owns your client id.
+The numeric prefix of the client id *is* the project number — check it matches
+the project where you enabled the APIs, and that all three APIs are enabled
+there, not just Gmail.
 
 **Chat card returns 403** — check the *Google Chat API* is enabled on the project
 and that your Workspace admin permits Chat API access for user accounts.

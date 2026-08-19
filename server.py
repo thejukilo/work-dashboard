@@ -59,6 +59,9 @@ def redirect_uri(provider):
 # --------------------------------------------------------------------------- #
 # Building the overview
 # --------------------------------------------------------------------------- #
+SECTION_FEATURES = {"emails": "gmail", "events": "calendar", "chats": "chat"}
+
+
 def section(fetch):
     """Run one feed, turning any failure into something the UI can render."""
     try:
@@ -73,27 +76,37 @@ def section(fetch):
                 "needs_auth": False}
 
 
+def switched_off(feature):
+    return {"ok": False, "items": [], "off": True, "needs_auth": False,
+            "error": f"Turned off — add \"{feature}\" to google.features in config.json."}
+
+
 def build_overview(cfg):
     limits = cfg["limits"]
+    features = auth.google_features(cfg)
 
-    def google(fetch, limit):
+    def google(feature, fetch, limit):
         def run():
             token = auth.credentials("google", cfg)["access_token"]
             return fetch(token, limit)
-        return run
+        return run if feature in features else None
 
     def salesforce():
         creds = auth.credentials("salesforce", cfg)
         return sources.recent_cases(creds, cfg, limits["cases"])
 
     jobs = {
-        "emails": google(sources.latest_emails, limits["emails"]),
-        "events": google(sources.upcoming_events, limits["events"]),
-        "chats": google(sources.latest_chats, limits["chats"]),
+        "emails": google("gmail", sources.latest_emails, limits["emails"]),
+        "events": google("calendar", sources.upcoming_events, limits["events"]),
+        "chats": google("chat", sources.latest_chats, limits["chats"]),
         "cases": salesforce,
     }
-    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        results = dict(zip(jobs, pool.map(section, jobs.values())))
+    live = {name: job for name, job in jobs.items() if job}
+    with ThreadPoolExecutor(max_workers=max(1, len(live))) as pool:
+        done = dict(zip(live, pool.map(section, live.values())))
+
+    results = {name: done.get(name) or switched_off(SECTION_FEATURES[name])
+               for name in jobs}
 
     return {
         "demo": False,
@@ -309,6 +322,11 @@ def run_check(cfg):
         secret = "set" if cfg[provider].get("client_secret") else "empty"
         state = f"client_id {client[:24]}… (secret {secret})" if client else "no client_id yet"
         print(f"  [{'x' if client else ' '}] {provider:<11} {state}")
+        if provider == "google" and client:
+            on = auth.google_features(cfg)
+            off = [f for f in auth.ALL_GOOGLE_FEATURES if f not in on]
+            print(f"      features on: {', '.join(on) or 'none'}"
+                  + (f"   off: {', '.join(off)}" if off else ""))
     if cfg["salesforce"]["client_id"]:
         print(f"      salesforce login_url {cfg['salesforce']['login_url']}")
 
@@ -326,6 +344,9 @@ def run_check(cfg):
         if result["ok"]:
             print(f"  [x] {label:<17} {len(result['items'])} item(s)")
             continue
+        if result.get("off"):
+            print(f"  [-] {label:<17} switched off in config.json")
+            continue
         failures += 1
         # NeedsAuth already says *why* ("revoked", "no client_id") — keep it.
         print(f"  [ ] {label:<17} {result['error'] or 'not connected yet'}")
@@ -333,8 +354,9 @@ def run_check(cfg):
         if hint:
             print(f"      → {hint}")
 
-    print("\nAll four feeds are working." if not failures
-          else f"\n{failures} of 4 feeds need attention (see above).")
+    live = sum(1 for r in sections.values() if not r.get("off"))
+    print(f"\nAll {live} enabled feeds are working." if not failures
+          else f"\n{failures} of {live} enabled feeds need attention (see above).")
     return 0 if not failures else 1
 
 

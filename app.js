@@ -100,9 +100,11 @@ function renderSection(name, section, emptyText, rowsHtml) {
   }
   if (!section.ok) {
     counter.textContent = "";
-    target.innerHTML = section.needs_auth
-      ? notConnected(providerFor(name))
-      : `<p class="error">${esc(section.error || "Something went wrong.")}</p>`;
+    target.innerHTML = section.off
+      ? `<p class="empty">${esc(section.error)}</p>`
+      : section.needs_auth
+        ? notConnected(providerFor(name))
+        : `<p class="error">${esc(section.error || "Something went wrong.")}</p>`;
     return;
   }
   counter.textContent = section.items.length ? `${section.items.length}` : "";
@@ -163,9 +165,11 @@ function renderEvents(section) {
 
   if (!section.ok) {
     counter.textContent = "";
-    target.innerHTML = section.needs_auth
-      ? notConnected("google")
-      : `<p class="error">${esc(section.error)}</p>`;
+    target.innerHTML = section.off
+      ? `<p class="empty">${esc(section.error)}</p>`
+      : section.needs_auth
+        ? notConnected("google")
+        : `<p class="error">${esc(section.error)}</p>`;
     return;
   }
   if (!section.items.length) {
